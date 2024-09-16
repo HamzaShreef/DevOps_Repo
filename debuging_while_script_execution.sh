@@ -1,12 +1,13 @@
 #!/bin/bash
 
 # Default configurations
-LOG_FILE="/var/log/messages"
-BACKUP_DIR="/var/log/backup"
+LOG_FILE="/mnt/d/devops/log/messages"
+BACKUP_DIR="/mnt/d/devops/log/backup"
 MAX_BACKUPS=2
 ANALYSIS_REPORT="$BACKUP_DIR/log_analysis_report.txt"
 LOG_CRITERIA=("error" "warning" "critical")
 REPORT_FORMAT="text"
+DEBUG_MODE=false
 
 
 usage() {
@@ -17,6 +18,7 @@ usage() {
     echo "  -m, --max-backups      Specify the maximum number of backups to retain (default: 2)"
     echo "  -c, --config           Specify a configuration file"
     echo "  -r, --report-format    Specify the report format (text or json, default: text)"
+    echo "  -d, --debug            Enable debug mode"
     echo "  -h, --help             Display this help message"
     echo
     echo "Examples:"
@@ -25,15 +27,29 @@ usage() {
     exit 1
 }
 
-# Function to load configurations from a file
+
 load_config() {
     if [ -f "$1" ]; then
         source "$1"
-        echo "Loaded configuration from $1"
+        debug "Loaded configuration from $1"
     else
         echo "Error: Configuration file $1 not found."
         exit 1
     fi
+}
+
+# Debug function to log messages if debug mode is enabled
+debug() {
+    if [ "$DEBUG_MODE" = true ]; then
+        echo "[DEBUG] $(date +'%Y-%m-%d %H:%M:%S') - $1"
+    fi
+}
+
+# Function to monitor CPU usage
+monitor_cpu() {
+    debug "Monitoring CPU usage..."
+    CPU_USAGE=$(top -b -n1 | grep "Cpu(s)" | awk '{print $2 + $4}')
+    debug "Current CPU usage: $CPU_USAGE%"
 }
 
 # Parse command-line options
@@ -60,6 +76,10 @@ while [[ $# -gt 0 ]]; do
             REPORT_FORMAT="$2"
             shift; shift
             ;;
+        -d|--debug)
+            DEBUG_MODE=true
+            shift
+            ;;
         -h|--help)
             usage
             ;;
@@ -69,6 +89,11 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Enable trace mode for debugging
+if [ "$DEBUG_MODE" = true ]; then
+    set -x
+fi
 
 
 read -p "Please enter your name: " USER_NAME
@@ -85,17 +110,22 @@ echo "Hello, $USER_NAME from $USER_COUNTRY! You are $USER_AGE years old."
 
 
 if [ -f "$LOG_FILE" ]; then
-   
+
+    monitor_cpu  # Monitor CPU usage
+    
 
     if [ ! -d "$BACKUP_DIR" ]; then
         mkdir -p "$BACKUP_DIR"
-        echo "Created backup directory: $BACKUP_DIR"
+        debug "Created backup directory: $BACKUP_DIR"
     fi
 
 
     TIMESTAMP=$(date +'%Y%m%d%H%M%S')
     BACKUP_FILE="$BACKUP_DIR/messages.$TIMESTAMP"
-    cp "$LOG_FILE" "$BACKUP_FILE"
+    
+    # Use rsync for efficient file copying
+    debug "Copying $LOG_FILE to $BACKUP_FILE..."
+    rsync --inplace --no-whole-file "$LOG_FILE" "$BACKUP_FILE"
     
     if [ $? -eq 0 ]; then
         echo "[$USER_NAME] Successfully copied $LOG_FILE to $BACKUP_FILE."
@@ -104,8 +134,11 @@ if [ -f "$LOG_FILE" ]; then
         exit 1
     fi
 
-    # Clear the log file
-    : > "$LOG_FILE"  
+    monitor_cpu  # Monitor CPU usage
+
+    # Clear the log file efficiently
+    debug "Clearing the contents of $LOG_FILE..."
+    cat /dev/null > "$LOG_FILE"
 
     if [ $? -eq 0 ]; then
         echo "[$USER_NAME] Successfully cleared the contents of $LOG_FILE."
@@ -114,7 +147,9 @@ if [ -f "$LOG_FILE" ]; then
         exit 1
     fi
 
+    monitor_cpu  # Monitor CPU usage
 
+    # Analyze the copied log file and generate a report
     echo "[$USER_NAME] Generating log analysis report..."
     
     if [ "$REPORT_FORMAT" = "json" ]; then
@@ -145,15 +180,22 @@ if [ -f "$LOG_FILE" ]; then
 
     echo "[$USER_NAME] Log analysis report saved to $ANALYSIS_REPORT."
 
+    monitor_cpu  # Monitor CPU usage
+
     # Rotate backups and retain only the last $MAX_BACKUPS
-    BACKUP_COUNT=$(ls -1q $BACKUP_DIR/messages.* | wc -l)
+    BACKUP_COUNT=$(ls -1q "$BACKUP_DIR/messages."* | wc -l)
     if [ "$BACKUP_COUNT" -gt "$MAX_BACKUPS" ]; then
         # Delete older backups
         REMOVE_COUNT=$((BACKUP_COUNT - MAX_BACKUPS))
         echo "[$USER_NAME] Removing $REMOVE_COUNT old backup(s)..."
-        ls -1t $BACKUP_DIR/messages.* | tail -n "$REMOVE_COUNT" | xargs rm -f
+        ls -1t "$BACKUP_DIR/messages."* | tail -n "$REMOVE_COUNT" | xargs rm -f
     fi
 else
     echo "[$USER_NAME] Error: $LOG_FILE does not exist."
     exit 1
+fi
+
+# Disable trace mode after debugging
+if [ "$DEBUG_MODE" = true ]; then
+    set +x
 fi
